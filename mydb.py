@@ -16,6 +16,8 @@ engine = create_engine(
 
 def execute_query(query):
     with engine.connect() as conn:
+        if isinstance(query, str):
+            query = text(query)
         result = conn.execute(query)
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
     return df
@@ -29,6 +31,3 @@ def get_schema(table_name):
         """)
         schema = execute_query(query)
         return schema
-
-result = get_schema("order")
-print(result)
