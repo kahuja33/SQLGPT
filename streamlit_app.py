@@ -3,7 +3,7 @@ import time
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
-from mydb import execute_query, get_schema
+from mydb import execute_query, get_schema, get_tables
 
 load_dotenv()
 
@@ -94,6 +94,11 @@ def get_openai_client():
 
 
 @st.cache_data(ttl=3600)
+def load_available_tables():
+    return get_tables()
+
+
+@st.cache_data(ttl=3600)
 def load_database_schema(table_name="order"):
     schema_df = get_schema(table_name)
     schema_text = "Table: " + table_name + "\n\n"
@@ -137,19 +142,56 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-if "schema" not in st.session_state:
+if "available_tables" not in st.session_state:
     try:
-        st.session_state.schema = load_database_schema()
-        st.session_state.schema_error = None
+        st.session_state.available_tables = load_available_tables()
+        st.session_state.tables_error = None
     except Exception as e:
-        st.session_state.schema = None
-        st.session_state.schema_error = str(e)
+        st.session_state.available_tables = []
+        st.session_state.tables_error = str(e)
+
+if "selected_table" not in st.session_state:
+    st.session_state.selected_table = (
+        st.session_state.available_tables[0] if st.session_state.available_tables else "order"
+    )
 
 # ---- Sidebar --------------------------------------------------------------
 with st.sidebar:
+    st.subheader("Table", anchor=False, divider=False)
+
+    if st.session_state.tables_error:
+        st.error(f"Couldn't load tables: {st.session_state.tables_error}", icon=":material/error:")
+    elif st.session_state.available_tables:
+        st.selectbox(
+            "Table to query",
+            options=st.session_state.available_tables,
+            key="selected_table",
+            label_visibility="collapsed",
+        )
+    else:
+        st.caption("No tables found in the `public` schema.")
+
+    if st.session_state.get("schema_table") != st.session_state.selected_table:
+        try:
+            st.session_state.schema = load_database_schema(st.session_state.selected_table)
+            st.session_state.schema_error = None
+        except Exception as e:
+            st.session_state.schema = None
+            st.session_state.schema_error = str(e)
+        st.session_state.schema_table = st.session_state.selected_table
+        # Selected table changed: downstream question/query state no longer applies.
+        st.session_state.current_question = ""
+        st.session_state.generated_query = None
+        st.session_state.query_results = None
+        st.session_state.execution_status = None
+        st.session_state.should_show_query = False
+        st.session_state.exec_elapsed = None
+
+    st.divider()
+
     st.subheader("Schema", anchor=False, divider=False)
 
-    with st.expander("Order table columns", icon=":material/table_chart:", expanded=False):
+    with st.expander(f"{st.session_state.selected_table} table columns", icon=":material/table_chart:", expanded=False):
         if st.session_state.schema_error:
             st.error(f"Couldn't load schema: {st.session_state.schema_error}", icon=":material/error:")
         else:
@@ -158,7 +200,9 @@ with st.sidebar:
     if st.button("Refresh schema", icon=":material/refresh:", width="stretch"):
         st.cache_data.clear()
         try:
-            st.session_state.schema = load_database_schema()
+            st.session_state.available_tables = load_available_tables()
+            st.session_state.tables_error = None
+            st.session_state.schema = load_database_schema(st.session_state.selected_table)
             st.session_state.schema_error = None
             st.toast("Schema refreshed", icon=":material/check_circle:")
         except Exception as e:
@@ -187,8 +231,8 @@ with st.sidebar:
     with st.expander("About this app", icon=":material/info:", expanded=False):
         st.caption(
             "Describe what you want to know in plain English. GPT turns it into "
-            "a PostgreSQL query against your Supabase `order` table, which you "
-            "can review before running."
+            f"a PostgreSQL query against your Supabase `{st.session_state.selected_table}` table, "
+            "which you can review before running."
         )
     st.caption("SQL Query Generator · v2.0")
 
@@ -237,11 +281,12 @@ if st.session_state.current_question:
                 schema = st.session_state.schema
                 st.write(f"Question: _{st.session_state.current_question}_")
 
+                table_name = st.session_state.selected_table
                 prompt = (
                     f"Generate a PostgreSQL query based on this schema:\n{schema}\n\n"
                     f"Question: {st.session_state.current_question}\n\n"
-                    "IMPORTANT: Always use 'public.order' (with schema prefix) instead of "
-                    "just 'order' to avoid reserved keyword issues.\n\nReturn only the SQL query."
+                    f"IMPORTANT: Always use 'public.{table_name}' (with schema prefix) instead of "
+                    f"just '{table_name}' to avoid reserved keyword issues.\n\nReturn only the SQL query."
                 )
 
                 response = client.responses.create(model="gpt-4o-mini", input=prompt)

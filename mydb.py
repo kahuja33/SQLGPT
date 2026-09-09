@@ -22,6 +22,16 @@ def execute_query(query):
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
     return df
 
+def get_tables():
+    query = text("""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        ORDER BY table_name;
+    """)
+    tables = execute_query(query)
+    return tables['table_name'].tolist()
+
 def get_schema(table_name):
         query = text(f"""
             SELECT table_name, column_name, data_type
