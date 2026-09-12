@@ -87,6 +87,8 @@ EXAMPLE_QUESTIONS = [
     "What is the average order value this year?",
 ]
 
+FOLLOWUP_LIMIT = 3
+
 
 @st.cache_resource
 def get_openai_client():
@@ -116,6 +118,26 @@ def clean_sql_response(response_str: str) -> str:
     return cleaned.strip()
 
 
+def build_followup_system_prompt(schema: str, table_name: str, question: str, generated_query: str) -> str:
+    return (
+        "You are an expert PostgreSQL SQL query generator having a conversation with a user "
+        "about a query you already generated for them.\n\n"
+        f"Database schema (table: public.{table_name}):\n{schema}\n\n"
+        f"The user's original question was: {question}\n"
+        f"You already generated this SQL query for it:\n{generated_query}\n\n"
+        f"IMPORTANT: Always use 'public.{table_name}' (with schema prefix) instead of just "
+        f"'{table_name}' to avoid reserved keyword issues.\n\n"
+        "Answer the user's follow-up questions, refining or explaining the SQL as needed. "
+        "When you provide SQL, return it in a ```sql code block."
+    )
+
+
+def reset_followup_chat():
+    """Clear the follow-up chat thread and its usage counter."""
+    st.session_state.chat_messages = []
+    st.session_state.followup_count = 0
+
+
 def start_new_question(question: str):
     """Reset downstream state and queue `question` for generation."""
     st.session_state.current_question = question
@@ -124,6 +146,7 @@ def start_new_question(question: str):
     st.session_state.execution_status = None
     st.session_state.should_show_query = True
     st.session_state.exec_elapsed = None
+    reset_followup_chat()
     if question not in st.session_state.questions:
         st.session_state.questions.append(question)
 
@@ -138,6 +161,8 @@ for key, default in {
     "should_show_query": False,
     "exec_elapsed": None,
     "question_input": "",
+    "chat_messages": [],
+    "followup_count": 0,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -186,6 +211,7 @@ with st.sidebar:
         st.session_state.execution_status = None
         st.session_state.should_show_query = False
         st.session_state.exec_elapsed = None
+        reset_followup_chat()
 
     st.divider()
 
@@ -226,6 +252,18 @@ with st.sidebar:
             st.rerun()
     else:
         st.caption("Questions you ask will show up here for quick re-use.")
+
+    st.divider()
+
+    st.subheader("Follow-up chat", anchor=False, divider=False)
+    if st.session_state.generated_query:
+        st.caption(f"Follow-ups used: {st.session_state.followup_count} of {FOLLOWUP_LIMIT}")
+        if st.button("Start New Session / Reset", icon=":material/restart_alt:", width="stretch"):
+            reset_followup_chat()
+            st.toast("Follow-up chat reset", icon=":material/check_circle:")
+            st.rerun()
+    else:
+        st.caption("Generate a query to unlock follow-up questions.")
 
     st.divider()
     with st.expander("About this app", icon=":material/info:", expanded=False):
@@ -314,6 +352,7 @@ if st.session_state.current_question:
                     st.session_state.current_question = ""
                     st.session_state.should_show_query = False
                     st.session_state.exec_elapsed = None
+                    reset_followup_chat()
                     st.rerun()
 
             if execute_clicked:
@@ -369,3 +408,68 @@ if st.session_state.current_question:
 
         elif st.session_state.execution_status == "error":
             st.error(f"Error executing query: {st.session_state.query_results}", icon=":material/error:")
+
+        # ---- Follow-up chat ----------------------------------------------
+        with st.container(border=True):
+            st.markdown("#### :material/forum: Ask a follow-up")
+
+            if not st.session_state.chat_messages:
+                st.session_state.chat_messages = [
+                    {
+                        "role": "system",
+                        "content": build_followup_system_prompt(
+                            st.session_state.schema,
+                            st.session_state.selected_table,
+                            st.session_state.current_question,
+                            st.session_state.generated_query,
+                        ),
+                    }
+                ]
+
+            remaining = max(FOLLOWUP_LIMIT - st.session_state.followup_count, 0)
+            if remaining > 0:
+                st.caption(f"Follow-ups remaining: {remaining} of {FOLLOWUP_LIMIT}")
+            else:
+                st.warning(
+                    "Follow-up limit reached (3/3). To prevent excessive token consumption, "
+                    "start a new session from the sidebar to keep chatting.",
+                    icon=":material/warning:",
+                )
+
+            for message in st.session_state.chat_messages:
+                if message["role"] == "system":
+                    continue
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+
+            limit_reached = st.session_state.followup_count >= FOLLOWUP_LIMIT
+            followup_prompt = st.chat_input(
+                "Ask a follow-up about this query..."
+                if not limit_reached
+                else "Follow-up limit reached (3/3). Reset session to ask new questions.",
+                disabled=limit_reached,
+                key="followup_chat_input",
+            )
+
+            if followup_prompt:
+                st.session_state.followup_count += 1
+                st.session_state.chat_messages.append({"role": "user", "content": followup_prompt})
+
+                with st.chat_message("user"):
+                    st.markdown(followup_prompt)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Generating response…"):
+                        try:
+                            client = get_openai_client()
+                            response = client.chat.completions.create(
+                                model="gpt-4o",
+                                messages=st.session_state.chat_messages,
+                            )
+                            assistant_reply = response.choices[0].message.content
+                        except Exception as e:
+                            assistant_reply = f"Error generating response: {e}"
+                    st.markdown(assistant_reply)
+
+                st.session_state.chat_messages.append({"role": "assistant", "content": assistant_reply})
+                st.rerun()
