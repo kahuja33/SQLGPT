@@ -1,3 +1,4 @@
+import re
 import time
 
 import streamlit as st
@@ -136,6 +137,56 @@ def reset_followup_chat():
     """Clear the follow-up chat thread and its usage counter."""
     st.session_state.chat_messages = []
     st.session_state.followup_count = 0
+    st.session_state.chat_query_results = {}
+
+
+def extract_sql(content: str):
+    """Pull a SQL statement out of an assistant follow-up reply, if one is present."""
+    match = re.search(r"```sql\s*(.*?)```", content, re.IGNORECASE | re.DOTALL)
+    if not match:
+        match = re.search(r"```\s*(.*?)```", content, re.DOTALL)
+    if match:
+        sql = match.group(1).strip()
+        return sql or None
+
+    stripped = content.strip()
+    first_word = stripped.split(None, 1)[0].lower() if stripped else ""
+    if first_word in ("select", "with", "insert", "update", "delete"):
+        return stripped
+    return None
+
+
+def render_followup_query_execution(idx: int, sql: str):
+    """Render an Execute button under a follow-up chat turn and persist/display its result."""
+    if st.button("Execute query", key=f"exec_btn_{idx}", icon=":material/play_arrow:"):
+        with st.spinner("Running query..."):
+            start = time.time()
+            try:
+                df = execute_query(sql)
+                st.session_state.chat_query_results[idx] = {
+                    "status": "success",
+                    "df": df,
+                    "elapsed": time.time() - start,
+                }
+            except Exception as e:
+                st.session_state.chat_query_results[idx] = {
+                    "status": "error",
+                    "error": str(e),
+                }
+
+    result = st.session_state.chat_query_results.get(idx)
+    if result:
+        if result["status"] == "success":
+            df = result["df"]
+            m1, m2 = st.columns(2)
+            m1.metric("Rows", len(df))
+            m2.metric("Runtime", f"{result['elapsed']:.2f}s")
+            if len(df) == 0:
+                st.info("No results returned from the query.", icon=":material/info:")
+            else:
+                st.dataframe(df, width="stretch")
+        else:
+            st.error(f"Error executing query: {result['error']}", icon=":material/error:")
 
 
 def start_new_question(question: str):
@@ -163,6 +214,7 @@ for key, default in {
     "question_input": "",
     "chat_messages": [],
     "followup_count": 0,
+    "chat_query_results": {},
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -436,11 +488,15 @@ if st.session_state.current_question:
                     icon=":material/warning:",
                 )
 
-            for message in st.session_state.chat_messages:
+            for idx, message in enumerate(st.session_state.chat_messages):
                 if message["role"] == "system":
                     continue
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
+                    if message["role"] == "assistant":
+                        followup_sql = extract_sql(message["content"])
+                        if followup_sql:
+                            render_followup_query_execution(idx, followup_sql)
 
             limit_reached = st.session_state.followup_count >= FOLLOWUP_LIMIT
             followup_prompt = st.chat_input(

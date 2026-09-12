@@ -1,2 +1,6 @@
 myenv/
 .env
+__pycache__/
+*.pyc
+Fetch_Data_supabase.py
+chat_app.py
