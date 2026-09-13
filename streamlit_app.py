@@ -81,13 +81,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-EXAMPLE_QUESTIONS = [
-    "What were total sales last month?",
-    "Show the 10 most recent orders",
-    "Which customer placed the most orders?",
-    "What is the average order value this year?",
-]
-
 FOLLOWUP_LIMIT = 3
 
 
@@ -334,14 +327,6 @@ with st.container(key="hero_box"):
 # ---- Ask a question --------------------------------------------------
 with st.container(border=True):
     st.markdown("#### :material/edit_note: Ask a question")
-
-    if not st.session_state.questions:
-        st.caption("Not sure where to start? Try one of these:")
-        with st.container(horizontal=True):
-            for i, example in enumerate(EXAMPLE_QUESTIONS):
-                if st.button(example, key=f"ex_{i}"):
-                    st.session_state.question_input = example
-                    start_new_question(example)
 
     with st.form("ask_form"):
         st.text_input(
