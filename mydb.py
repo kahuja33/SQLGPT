@@ -6,7 +6,7 @@ import psycopg2
 DB_HOST = "aws-0-ap-northeast-2.pooler.supabase.com"
 DB_NAME = "postgres"
 DB_USER = "postgres.nrgkpbjgqwwvejwqyojo"
-DB_PASSWORD = "oWrWR7gituTcBi46"
+DB_PASSWORD = "oWrWR7"
 DB_PORT = "6543"
 
 # SQLAlchemy connection string format
